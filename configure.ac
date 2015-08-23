@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([pnmixer], 0.6-dev)
+AC_INIT([pnmixer], 0.6-rc2)
 AM_INIT_AUTOMAKE
 AM_MAINTAINER_MODE
 
@@ -8,6 +8,7 @@ AC_ISC_POSIX
 AC_PROG_CC
 AC_HEADER_STDC
 
+IT_PROG_INTLTOOL([0.40])
 
 AC_ARG_WITH([gtk3],
 			  [AS_HELP_STRING([--with-gtk3],
@@ -16,7 +17,7 @@ AC_ARG_WITH([gtk3],
 			  [with_gtk3=yes])
 
 if test "$with_gtk3" = "yes" ; then
-	pkg_modules="gtk+-3.0 >= 3.6.0"
+	pkg_modules="gtk+-3.0 >= 3.4.2"
 	AC_DEFINE([WITH_GTK3], [], [Gtk3 mode])
 else
 	pkg_modules="gtk+-2.0 >= 2.16.0"
@@ -59,7 +60,7 @@ AC_ARG_ENABLE([minimal-flags],
 if test x"$debugit" = x"yes"; then
     AC_DEFINE([DEBUG],[],[Debug Mode])
 	if test "$minimalflags" = "no" ; then
-	    CFLAGS="$CFLAGS -g -Wall -Werror -Wno-uninitialized -Wformat -Wformat-security -O0"
+	    CFLAGS="$CFLAGS -g -Wall -Werror -Wno-uninitialized  -Wno-deprecated-declarations -Wformat -Wformat-security -O0"
 	fi
 else
     AC_DEFINE([NDEBUG],[],[No-debug Mode])
@@ -101,16 +102,21 @@ PKG_CHECK_MODULES(PACKAGE, [$pkg_modules])
 AC_SUBST(PACKAGE_CFLAGS)
 AC_SUBST(PACKAGE_LIBS)
 
+# Needed by intltool
 GETTEXT_PACKAGE=pnmixer
 AC_SUBST(GETTEXT_PACKAGE)
 AC_DEFINE_UNQUOTED(GETTEXT_PACKAGE,"$GETTEXT_PACKAGE", [Gettext package.])
 
 dnl Add the languages which your application supports here.
 ALL_LINGUAS="de fr it ru"
-AM_GLIB_GNU_GETTEXT
 
 AC_OUTPUT([
 Makefile
+data/Makefile
+data/desktop/Makefile
+data/icons/Makefile
+data/pixmaps/Makefile
+data/ui/Makefile
 src/Makefile
 po/Makefile.in
 ])

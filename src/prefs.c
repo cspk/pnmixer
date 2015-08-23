@@ -58,11 +58,10 @@ AlsaCard=default"
  * Get available icon themes.
  * This code is based on code from xfce4-appearance-settings.
  *
- * @param icon_theme_combo the GtkComboBox to use
- * @param store where to store the icon theme list
+ * @param combo the GtkComboBox to use
  */
 static void
-load_icon_themes(GtkWidget* icon_theme_combo, GtkListStore* store) {
+load_icon_themes(GtkWidget* combo) {
   GDir          *dir;
   GKeyFile      *index_file;
   const gchar   *file;
@@ -73,8 +72,10 @@ load_icon_themes(GtkWidget* icon_theme_combo, GtkListStore* store) {
   gboolean      is_dup;
   GtkIconTheme* theme;
   gchar         **path;
-
   GtkTreeIter iter;
+  GtkListStore* store = GTK_LIST_STORE(gtk_combo_box_get_model
+				       (GTK_COMBO_BOX(combo)));
+
   gtk_list_store_append(store, &iter);
   gtk_list_store_set(store, &iter, 0, _("PNMixer Icons"), -1);
 
@@ -121,7 +122,7 @@ load_icon_themes(GtkWidget* icon_theme_combo, GtkListStore* store) {
 	    gtk_list_store_append(store, &iter);
 	    gtk_list_store_set(store, &iter, 0, _(theme_name), -1);
 	    if ((active_theme_name != NULL) && g_strcmp0(theme_name,active_theme_name) == 0)
-	      gtk_combo_box_set_active (GTK_COMBO_BOX (icon_theme_combo), act);
+	      gtk_combo_box_set_active (GTK_COMBO_BOX (combo), act);
 	    else
 	      act++;
 	    g_free(theme_name);
@@ -135,7 +136,7 @@ load_icon_themes(GtkWidget* icon_theme_combo, GtkListStore* store) {
   if (active_theme_name != NULL)
     g_free(active_theme_name);
   else
-    gtk_combo_box_set_active(GTK_COMBO_BOX (icon_theme_combo), 0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX (combo), 0);
 }
 
 #ifdef WITH_GTK3
@@ -202,7 +203,7 @@ void ensure_prefs_dir(void) {
       report_error(_("\nError: %s exists but is not a directory, will not be able to save preferences"),prefs_dir);
     else {
       if (g_mkdir(prefs_dir,S_IRWXU))
-	report_error("\nCouldn't make prefs directory: %s\n",strerror(errno));
+	report_error(_("\nCouldn't make prefs directory: %s\n"),strerror(errno));
     }
   }
   g_free(prefs_dir);
@@ -308,7 +309,7 @@ static void set_notification_options() {
 
 /**
  * Applies the preferences, usually triggered by on_ok_button_clicked()
- * in callbacks.c, but also initially caled from main().
+ * in callbacks.c, but also initially called from main().
  *
  * @param alsa_change whether we want to trigger alsa-reinitalization
  */
@@ -336,13 +337,14 @@ void apply_prefs(gint alsa_change) {
   set_notification_options();
 
   get_icon_theme();
-  if (alsa_change)
-    alsa_init();
+
   vol_meter_clrs = get_vol_meter_colors();
   set_vol_meter_color(vol_meter_clrs[0],vol_meter_clrs[1],vol_meter_clrs[2]);
   g_free(vol_meter_clrs);
   update_status_icons();
-  update_vol_text();
+
+  if (alsa_change)
+    do_alsa_reinit();
 }
 
 /**
@@ -420,15 +422,15 @@ void fill_channel_combo(GSList *channels, GtkWidget *combo, gchar* selected) {
 void fill_card_combo(GtkWidget *combo, GtkWidget *channels_combo) {
   struct acard* c;
   GSList *cur_card;
-  gchar* selected_card;
-  int fs=0,idx,sidx=0;
+  struct acard *active_card;
+  int idx,sidx=0;
 
   GtkTreeIter iter;
   GtkListStore* store = GTK_LIST_STORE(gtk_combo_box_get_model
 				       (GTK_COMBO_BOX(combo)));
 
   cur_card = cards;
-  selected_card = get_selected_card();
+  active_card = alsa_get_active_card();
   idx = 0;
   while (cur_card) {
     c = cur_card->data;
@@ -436,11 +438,10 @@ void fill_card_combo(GtkWidget *combo, GtkWidget *channels_combo) {
       cur_card = cur_card->next;
       continue;
     }
-    if (selected_card && !strcmp(c->name,selected_card)) {
+    if (active_card && !strcmp(c->name, active_card->name)) {
       gchar *sel_chan = get_selected_channel(c->name);
       sidx = idx;
       fill_channel_combo(c->channels,channels_combo,sel_chan);
-      fs = 1;
       if (sel_chan)
 	g_free(sel_chan);
     }
@@ -449,17 +450,8 @@ void fill_card_combo(GtkWidget *combo, GtkWidget *channels_combo) {
     cur_card = cur_card->next;
     idx++;
   }
-  if (!fs) {
-    gchar *sel_chan;
-    c = cards->data;
-    sel_chan = get_selected_channel(c->name);
-    fill_channel_combo(c->channels,channels_combo,sel_chan);
-    if (sel_chan)
-      g_free(sel_chan);
-  }
+
   gtk_combo_box_set_active (GTK_COMBO_BOX (combo),sidx);
-  if (selected_card)
-    g_free(selected_card);
 }
 
 /**
@@ -471,13 +463,18 @@ void fill_card_combo(GtkWidget *combo, GtkWidget *channels_combo) {
  * @param data user data set when the signal handler was connected
  */
 void on_card_changed(GtkComboBox* box, PrefsData* data) {
-  gint idx = gtk_combo_box_get_active (GTK_COMBO_BOX(box));
-  GSList *card = g_slist_nth(cards,idx);
-  struct acard *c = card->data;
-  gchar *sel_chan = get_selected_channel(c->name);
-  fill_channel_combo(c->channels,data->chan_combo,sel_chan);
-  if (sel_chan)
+  struct acard *card;
+  gchar *card_name;
+
+  card_name = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(box));
+  card = find_card(card_name);
+  g_free(card_name);
+
+  if (card) {
+    gchar *sel_chan = get_selected_channel(card->name);
+    fill_channel_combo(card->channels, data->chan_combo, sel_chan);
     g_free(sel_chan);
+  }
 }
 
 /**
@@ -615,7 +612,7 @@ void acquire_hotkey(const char* widget_name,
     2:-1;
 
   if (action < 0) {
-    report_error("Invalid widget passed to acquire_hotkey: %s",widget_name);
+    report_error(_("Invalid widget passed to acquire_hotkey: %s"),widget_name);
     return;
   }
 
@@ -677,7 +674,7 @@ void acquire_hotkey(const char* widget_name,
     }
   }
   else
-    report_error("%s", _("Could not grab the keyboard."));
+    report_error(_("Could not grab the keyboard."));
   gtk_widget_hide(diag);
 }
 
@@ -771,8 +768,8 @@ gboolean normalize_vol(void) {
 }
 
 /**
- * Creates the whole preferences window by reading prefs-gtk3.xml
- * or prefs-gtk2.xml and returns the result.
+ * Creates the whole preferences window by reading prefs-gtk3.glade
+ * or prefs-gtk2.glade and returns the result.
  *
  * @return the newly created preferences window, NULL on failure
  */
@@ -792,9 +789,9 @@ GtkWidget* create_prefs_window (void) {
   PrefsData  *prefs_data;
 
 #ifdef WITH_GTK3
-  uifile = get_ui_file("prefs-gtk3.xml");
+  uifile = get_ui_file("prefs-gtk3.glade");
 #else
-  uifile = get_ui_file("prefs-gtk2.xml");
+  uifile = get_ui_file("prefs-gtk2.glade");
 #endif
   if (!uifile) {
     report_error(_("Can't find preferences user interface file.  Please insure PNMixer is installed correctly.\n"));
@@ -871,9 +868,7 @@ GtkWidget* create_prefs_window (void) {
      g_key_file_get_integer_with_default(keyFile,"PNMixer","VolMeterPos",0));
 
   // load available icon themes into icon theme combo box.  also sets active
-  load_icon_themes(prefs_data->icon_theme_combo,
-		   GTK_LIST_STORE(gtk_builder_get_object(builder,"icon_theme_liststore")));
-
+  load_icon_themes(prefs_data->icon_theme_combo);
 
   // set color button color
   vol_meter_clrs = get_vol_meter_colors();

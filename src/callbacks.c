@@ -12,7 +12,7 @@
  * @file callbacks.c
  * This file holds callback functions for various signals
  * received by different GtkWidgets, some of them defined
- * in the gtk-builder xml files.
+ * in the gtk-builder glade files.
  * @brief gtk callbacks
  */
 
@@ -67,11 +67,26 @@ gboolean vol_scroll_event(GtkRange     *range,
 			  GtkScrollType scroll,
 			  gdouble       value,
 			  gpointer      user_data) {
+  GtkAdjustment *gtk_adj;
   int volumeset;
-  volumeset = (int)gtk_adjustment_get_value(vol_adjustment);
 
+  /* We must ensure that the new value meets the requirement
+   * defined by the GtkAdjustment. We have to do that manually,
+   * because at this moment the value within GtkAdjustment
+   * has not been updated yet, so using gtk_adjustment_get_value()
+   * returns a wrong value.
+   */
+  gtk_adj = gtk_range_get_adjustment(range);
+  if (value < gtk_adjustment_get_lower(gtk_adj)) {
+    value = gtk_adjustment_get_lower(gtk_adj);
+  }
+  if (value > gtk_adjustment_get_upper(gtk_adj)) {
+    value = gtk_adjustment_get_upper(gtk_adj);
+  }
 
-  setvol(volumeset,popup_noti);
+  volumeset = (int) value;
+
+  setvol(volumeset,0,popup_noti);
   if (get_mute_state(TRUE) == 0) {
     setmute(popup_noti);
     get_mute_state(TRUE);
@@ -94,9 +109,9 @@ gboolean on_scroll(GtkStatusIcon *status_icon,
 		gpointer user_data) {
   int cv = getvol();
   if (event->direction == GDK_SCROLL_UP) {
-    setvol(cv + scroll_step,mouse_noti);
+    setvol(cv + scroll_step,1,mouse_noti);
   } else if (event->direction == GDK_SCROLL_DOWN) {
-    setvol(cv - scroll_step,mouse_noti);
+    setvol(cv - scroll_step,-1,mouse_noti);
   }
 
   if (get_mute_state(TRUE) == 0) {
@@ -189,11 +204,7 @@ void on_ok_button_clicked(GtkButton *button,
   // alsa card
   GtkWidget *acc = data->card_combo;
   gchar *old_card = get_selected_card();
-#ifdef WITH_GTK3
   gchar *card = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT(acc));
-#else
-  gchar *card = gtk_combo_box_get_active_text (GTK_COMBO_BOX(acc));
-#endif
   if (old_card && strcmp(old_card,card))
       alsa_change = 1;
   g_key_file_set_string(keyFile,"PNMixer","AlsaCard",card);
@@ -203,11 +214,7 @@ void on_ok_button_clicked(GtkButton *button,
   gchar* old_channel = NULL;
   if (old_card)
     old_channel = get_selected_channel(old_card);
-#ifdef WITH_GTK3
   gchar* chan = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT(ccc));
-#else
-  gchar* chan = gtk_combo_box_get_active_text (GTK_COMBO_BOX(ccc));
-#endif
   if (old_channel) {
     if (strcmp(old_channel,chan))
       alsa_change = 1;
@@ -224,11 +231,7 @@ void on_ok_button_clicked(GtkButton *button,
   if (idx == 0) { // internal theme
     g_key_file_remove_key(keyFile,"PNMixer","IconTheme",NULL);
   } else {
-#ifdef WITH_GTK3
     gchar* theme_name = gtk_combo_box_text_get_active_text (GTK_COMBO_BOX_TEXT(icon_combo));
-#else
-  gchar* theme_name = gtk_combo_box_get_active_text (GTK_COMBO_BOX(icon_combo));
-#endif
     if (theme_name) {
       g_key_file_set_string(keyFile,"PNMixer","IconTheme",theme_name);
       g_free(theme_name);
@@ -354,4 +357,33 @@ void on_cancel_button_clicked(GtkButton *button,
 			      PrefsData *data) {
   gtk_widget_destroy(data->prefs_window);
   g_slice_free(PrefsData,data);
+}
+
+/**
+ * Callback function when a key is hit in prefs_window. Currently handles
+ * Esc key (calls on_cancel_button_clicked())
+ * and
+ * Return key (calls on_ok_button_clicked()).
+ *
+ * @param widget the widget that received the signal
+ * @param event the key event that was triggered
+ * @param data struct holding the GtkWidgets of the preferences windows
+ * @return TRUE to stop other handlers from being invoked for the event.
+ * False to propagate the event further
+ */
+gboolean on_key_press(GtkWidget *widget,
+		GdkEventKey *event,
+		PrefsData *data) {
+
+	switch(event->keyval) {
+		case GDK_KEY_Escape:
+			on_cancel_button_clicked(NULL, data);
+			break;
+		case GDK_KEY_Return:
+			on_ok_button_clicked(NULL, data);
+			break;
+		default:
+			return FALSE;
+	}
+	return TRUE;
 }

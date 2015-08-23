@@ -39,9 +39,18 @@
 #include "hotkeys.h"
 #include "prefs.h"
 
+enum {
+	VOLUME_MUTED,
+	VOLUME_OFF,
+	VOLUME_LOW,
+	VOLUME_MEDIUM,
+	VOLUME_HIGH,
+	N_VOLUME_ICONS
+};
+
 static GtkStatusIcon *tray_icon = NULL;
 static GtkWidget *popup_menu;
-static GdkPixbuf* status_icons[4];
+static GdkPixbuf* status_icons[N_VOLUME_ICONS] = { NULL };
 
 static char err_buf[512];
 
@@ -66,8 +75,10 @@ void report_error(char* err,...) {
     g_object_set(dialog,"text",err_buf,NULL);
     gtk_dialog_run (GTK_DIALOG (dialog));
     gtk_widget_destroy (dialog);
-  } else 
+  } else {
     vfprintf(stderr,err,ap);
+    fprintf(stderr,"\n");
+  }
   va_end(ap);
 }
 
@@ -270,8 +281,8 @@ GtkStatusIcon *create_tray_icon() {
 }
 
 /**
- * Creates the popup windows from popup_window-gtk3.xml or
- * popup_window-gtk2.xml
+ * Creates the popup windows from popup_window-gtk3.glade or
+ * popup_window-gtk2.glade
  */
 void create_popups (void) {
   GtkBuilder *builder;
@@ -279,9 +290,9 @@ void create_popups (void) {
   gchar      *uifile;
   builder = gtk_builder_new();
 #ifdef WITH_GTK3
-  uifile = get_ui_file("popup_window-gtk3.xml");
+  uifile = get_ui_file("popup_window-gtk3.glade");
 #else
-  uifile = get_ui_file("popup_window-gtk2.xml");
+  uifile = get_ui_file("popup_window-gtk2.glade");
 #endif
   if (!uifile) {
     report_error(_("Can't find main user interface file.  Please insure PNMixer is installed correctly.  Exiting\n"));
@@ -352,8 +363,8 @@ void do_alsa_reinit (void) {
 }
 
 /**
- * Creates and opens the about window from about-gtk3.xml or
- * about-gtk2.xml, triggered by clicking on the GtkImageMenuItem
+ * Creates and opens the about window from about-gtk3.glade or
+ * about-gtk2.glade, triggered by clicking on the GtkImageMenuItem
  * 'About' in the context menu.
  */
 void create_about (void) {
@@ -363,9 +374,9 @@ void create_about (void) {
   gchar      *uifile;
 
 #ifdef WITH_GTK3
-  uifile = get_ui_file("about-gtk3.xml");
+  uifile = get_ui_file("about-gtk3.glade");
 #else
-  uifile = get_ui_file("about-gtk2.xml");
+  uifile = get_ui_file("about-gtk2.glade");
 #endif
   if (!uifile) {
     report_error(_("Can't find about interface file.  Please insure PNMixer is installed correctly."));
@@ -453,20 +464,24 @@ int get_mute_state(gboolean set_check) {
   int muted;
   int tmpvol = getvol();
   char tooltip [60];
-  
+  gchar *active_card_name = (alsa_get_active_card())->name;
+  const char *active_channel = alsa_get_active_channel();
+
   muted = ismuted();
 
   if( muted == 1 ) {
     GdkPixbuf *icon;
     if (set_check)
       gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (mute_check), FALSE);
-    if (tmpvol < 33) 
-      icon = status_icons[1];
+    if (tmpvol == 0)
+      icon = status_icons[VOLUME_OFF];
+    else if (tmpvol < 33) 
+      icon = status_icons[VOLUME_LOW];
     else if (tmpvol < 66)
-      icon = status_icons[2];
+      icon = status_icons[VOLUME_MEDIUM];
     else 
-      icon = status_icons[3];
-    sprintf(tooltip, _("Volume: %d %%"), tmpvol);
+      icon = status_icons[VOLUME_HIGH];
+    sprintf(tooltip, _("%s (%s)\nVolume: %d %%"), active_card_name, active_channel, tmpvol);
 
     if (vol_meter_row) {
       GdkPixbuf* old_icon = icon_copy;
@@ -480,8 +495,9 @@ int get_mute_state(gboolean set_check) {
   } else {
     if (set_check)
       gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (mute_check), TRUE);
-    gtk_status_icon_set_from_pixbuf(tray_icon, status_icons[0]);
-    sprintf(tooltip, _("Volume: %d %%\nMuted"), tmpvol);
+    gtk_status_icon_set_from_pixbuf(tray_icon, status_icons[VOLUME_MUTED]);
+    sprintf(tooltip, _("%s (%s)\nVolume: %d %%\nMuted"), active_card_name,
+			active_channel, tmpvol);
   }
   gtk_status_icon_set_tooltip_text(tray_icon, tooltip);
   return muted;
@@ -499,29 +515,40 @@ int get_mute_state(gboolean set_check) {
  */
 gboolean hide_me(GtkWidget *widget, GdkEvent *event, gpointer user_data) {
 #ifdef WITH_GTK3
-	GdkDevice *device = gtk_get_current_event_device();
+  GdkDevice *device = gtk_get_current_event_device();
 #endif
-	gint x, y;
+  gint x, y;
 
-	if (event->type == GDK_BUTTON_PRESS) {
-		if (
+  switch (event->type) {
+  /* If a click happens outside of the popup, hide it */
+  case GDK_BUTTON_PRESS:
+    if (
 #ifdef WITH_GTK3
-			!gdk_device_get_window_at_position(device, &x, &y)
+      !gdk_device_get_window_at_position(device, &x, &y)
 #else
-			!gdk_window_at_pointer(&x, &y)
+      !gdk_window_at_pointer(&x, &y)
 #endif
-		   )
-		gtk_widget_hide(popup_window);
-	} else if (event->type == GDK_KEY_PRESS) {
-		switch (event->key.keyval) {
-		case GDK_KEY_Escape: {
-			gtk_widget_hide(popup_window);
-			break;
-	    }
-    }
-  } else {
+      )
       gtk_widget_hide(popup_window);
+    break;
+
+  /* If 'Esc' is pressed, hide popup */
+  case GDK_KEY_PRESS:
+    if (event->key.keyval == GDK_KEY_Escape) {
+      gtk_widget_hide(popup_window);
+    }
+    break;
+
+  /* Broken grab, hide popup */
+  case GDK_GRAB_BROKEN:
+    gtk_widget_hide(popup_window);
+    break;
+
+  /* Unhandle event, do nothing */
+  default:
+    break;
   }
+
   return FALSE;
 }
 
@@ -552,20 +579,27 @@ void set_vol_meter_color(gdouble nr,gdouble ng,gdouble nb) {
  */
 void update_status_icons() {
   int i,icon_width;
-  GdkPixbuf* old_icons[4];
+  GdkPixbuf* old_icons[N_VOLUME_ICONS];
   int size = tray_icon_size();
-  for(i=0;i<4;i++)
+  for(i=0;i<N_VOLUME_ICONS;i++)
     old_icons[i] = status_icons[i];
   if (g_key_file_has_key(keyFile,"PNMixer","IconTheme",NULL)) {
-    status_icons[0] = get_stock_pixbuf("audio-volume-muted",size);
-    status_icons[1] = get_stock_pixbuf("audio-volume-low",size);
-    status_icons[2] = get_stock_pixbuf("audio-volume-medium",size);
-    status_icons[3] = get_stock_pixbuf("audio-volume-high",size);
+    status_icons[VOLUME_MUTED]  = get_stock_pixbuf("audio-volume-muted",size);
+    status_icons[VOLUME_OFF]    = get_stock_pixbuf("audio-volume-off",size);
+    status_icons[VOLUME_LOW]    = get_stock_pixbuf("audio-volume-low",size);
+    status_icons[VOLUME_MEDIUM] = get_stock_pixbuf("audio-volume-medium",size);
+    status_icons[VOLUME_HIGH]   = get_stock_pixbuf("audio-volume-high",size);
+    /* 'audio-volume-off' is not available in every icon set. More info at:
+     * http://standards.freedesktop.org/icon-naming-spec/icon-naming-spec-latest.html
+     */
+    if (status_icons[VOLUME_OFF] == NULL)
+      status_icons[VOLUME_OFF] = get_stock_pixbuf("audio-volume-low",size);
   } else {
-    status_icons[0] = create_pixbuf("pnmixer-muted.png");
-    status_icons[1] = create_pixbuf("pnmixer-low.png");
-    status_icons[2] = create_pixbuf("pnmixer-medium.png");
-    status_icons[3] = create_pixbuf("pnmixer-high.png");
+    status_icons[VOLUME_MUTED]  = create_pixbuf("pnmixer-muted.png");
+    status_icons[VOLUME_OFF]    = create_pixbuf("pnmixer-off.png");
+    status_icons[VOLUME_LOW]    = create_pixbuf("pnmixer-low.png");
+    status_icons[VOLUME_MEDIUM] = create_pixbuf("pnmixer-medium.png");
+    status_icons[VOLUME_HIGH]   = create_pixbuf("pnmixer-high.png");
   }
   icon_width = gdk_pixbuf_get_height(status_icons[0]);
   vol_div_factor = ((gdk_pixbuf_get_height(status_icons[0])-10)/100.0);
@@ -591,8 +625,8 @@ void update_status_icons() {
   draw_offset = g_key_file_get_integer(keyFile,"PNMixer","VolMeterPos",NULL);
   if (tray_icon)
     get_mute_state(TRUE);
-  for(i = 0;i < 4;i++)
-    if(old_icons[i]) 
+  for(i = 0; i < N_VOLUME_ICONS; i++)
+    if (old_icons[i]) 
       g_object_unref(old_icons[i]);
 }
 
@@ -665,10 +699,9 @@ int main (int argc, char *argv[]) {
   }
 
   popup_window = NULL;
-  status_icons[0] = status_icons[1] = status_icons[2] = status_icons[3] = NULL;
 
   add_pixmap_directory (PACKAGE_DATA_DIR "/" PACKAGE "/pixmaps");
-  add_pixmap_directory ("./pixmaps");
+  add_pixmap_directory ("./data/pixmaps");
 
   ensure_prefs_dir();
   load_prefs();
